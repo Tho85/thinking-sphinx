@@ -587,7 +587,7 @@ module ThinkingSphinx
     end
     
     def star_query(query)
-      token = options[:star].is_a?(Regexp) ? options[:star] : /\w+/u
+      token = options[:star].is_a?(Regexp) ? options[:star] : /\p{Word}+/u
 
       query.gsub(/("#{token}(.*?#{token})?"|(?![!-])#{token})/u) do
         pre, proper, post = $`, $&, $'
