@@ -26,7 +26,8 @@ module ThinkingSphinx
         relation = relation.where(sql_where_clause(options))
         relation = relation.group(sql_group_clause)
         relation = relation.order('NULL') if adapter.sphinx_identifier == "mysql"
-        relation.to_sql
+        # FIXME replace multiple commas so MySQL doesn't complain (WTF?)
+        relation.to_sql.gsub(', , ', ', ')
       end
 
       # Simple helper method for the query range SQL - which is a statement that
