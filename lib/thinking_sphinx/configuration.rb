@@ -146,6 +146,8 @@ module ThinkingSphinx
       ThinkingSphinx.context.indexed_models.each do |model|
         model = model.constantize
         model.define_indexes
+        # FIXME call to_riddle once to avoid nasty ts_join_alias bug (WTF?)
+        model.to_riddle
         @configuration.indexes.concat model.to_riddle
         
         enforce_common_attribute_types
