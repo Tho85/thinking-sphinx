@@ -643,8 +643,8 @@ module ThinkingSphinx
       return '' if @options[:conditions].blank?
 
       ' ' + @options[:conditions].keys.collect { |key|
-        "@#{key} #{options[:conditions][key]}"
-      }.join(' ')
+        "@#{key} #{options[:conditions][key]}" if @options[:conditions][key].present?
+      }.compact.join(' ')
     end
 
     def star_query(query)
