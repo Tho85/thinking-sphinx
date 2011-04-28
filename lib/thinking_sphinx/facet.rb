@@ -120,7 +120,7 @@ module ThinkingSphinx
     def source_objects(object)
       column.__stack.each { |method|
         object = Array(object).collect { |item|
-          item.send(method)
+          item.send(method) if item.respond_to?(method)
         }.flatten.compact
 
         return nil if object.empty?
