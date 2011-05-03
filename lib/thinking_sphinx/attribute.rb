@@ -181,7 +181,7 @@ module ThinkingSphinx
       object = instance
       column = @columns.first
       column.__stack.each { |method|
-        object = object.send(method)
+        object = object.send(method) if object.respond_to?(method)
         return sphinx_value(nil) if object.nil?
       }
       
