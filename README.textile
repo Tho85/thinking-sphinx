@@ -19,11 +19,11 @@ To quickly see if your system is ready to run the thinking sphinx specs, run the
 To get the spec suite running, you will need to install the ginger gem:
 
 <pre><code>sudo gem install ginger --source http://gemcutter.org</code></pre>
-  
+
 Then install the cucumber, yard, jeweler and rspec gems. Make sure you have a git install version 1.6.0.0 or higher, otherwise the jeweler gem won't install. Bluecloth is required for some of the yard documentation.
 
 <pre>
-  sudo gem install bluecloth cucumber yard jeweler rspec 
+  sudo gem install bluecloth cucumber yard jeweler rspec
 </pre>
 
 Then set up your database:
@@ -32,7 +32,7 @@ Then set up your database:
   cp spec/fixtures/database.yml.default spec/fixtures/database.yml &&
   mysqladmin -u root create thinking_sphinx
 </pre>
-  
+
 This last step can be done automatically by the contribute.rb script if all dependencies are met.
 
 Make sure you don't have another Sphinx daemon (searchd) running. If you do, quit it with "rake ts:stop"
@@ -126,7 +126,6 @@ Since I first released this library, there's been quite a few people who have su
 * Andrei Bocan
 * László Bácsi
 * Peter Wagenet
-* Max Lapshin
 * Martin Emde
 * David Wennergren
 * Mark Lane
@@ -203,3 +202,23 @@ Since I first released this library, there's been quite a few people who have su
 * George Anderson
 * Greg Weber
 * Javier Ramírez
+* Patrick Tulskie
+* Konstantin Shabanov
+* Clemens Kofler
+* Ryan Mohr
+* Alex Chee
+* Florent Piteau
+* Bruno Santschi
+* Lars Weiler
+* Andrey Deryabin
+* Andrew White
+* Rémi Prévost
+* Justin Tanner
+* Josh Goebel
+* Jonathan Viney
+* Ngan Pham
+* Martin Gordon
+* Aaron Gibralter
+* Pavel Forkert
+* Anthony Byram
+* Pete Deffendol

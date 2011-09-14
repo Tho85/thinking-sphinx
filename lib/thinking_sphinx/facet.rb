@@ -16,6 +16,7 @@ module ThinkingSphinx
       when Facet
         facet.name
       when String, Symbol
+        return :class if facet.to_s == 'sphinx_internal_class'
         facet.to_s.gsub(/(_facet|_crc)$/,'').to_sym
       end
     end
@@ -98,16 +99,15 @@ module ThinkingSphinx
     
     def translate(object, attribute_value)
       objects = source_objects(object)
-      return nil if objects.nil? || objects.empty?
-      
-      if objects.length > 1
-        objects.collect { |item| item.send(column.__name) }.detect { |item|
-          item.to_crc32 == attribute_value
-        }
-      else
-        method = value_source || column.__name
-        objects.first.send(method)
-      end
+      return if objects.blank?
+
+      method = value_source || column.__name
+      object = objects.one? ? objects.first : objects.detect { |item|
+        result = item.send(method)
+        result && result.to_crc32 == attribute_value
+      }
+
+      object.try(method)
     end
     
     def source_objects(object)

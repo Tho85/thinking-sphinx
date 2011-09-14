@@ -120,27 +120,32 @@ module Riddle
       :group_by, :group_function, :group_clause, :group_distinct, :cut_off,
       :retry_count, :retry_delay, :anchor, :index_weights, :rank_mode,
       :max_query_time, :field_weights, :timeout, :overrides, :select,
-      :connection
+      :connection, :key
     attr_reader :queue
     
+    @@connection = nil
+    
     def self.connection=(value)
-      Thread.current[:riddle_connection] = value
+      Riddle.mutex.synchronize do
+        @@connection = value
+      end
     end
 
     def self.connection
-      Thread.current[:riddle_connection]
+      @@connection
     end
     
     # Can instantiate with a specific server and port - otherwise it assumes
     # defaults of localhost and 3312 respectively. All other settings can be
     # accessed and changed via the attribute accessors.
-    def initialize(servers=nil, port=nil)
+    def initialize(servers = nil, port = nil, key = nil)
       Riddle.version_warning
 
       servers = Array(servers || "localhost")
       @servers = servers.respond_to?(:shuffle) ? servers.shuffle : servers.sort_by{ rand }
       @port   = port     || 9312
       @socket = nil
+      @key    = key
       
       reset
       
@@ -249,18 +254,23 @@ module Riddle
           result[:attribute_names] << attribute_name
         end
 
+        result_attribute_names_and_types = result[:attribute_names].
+          inject([]) { |array, attr| array.push([ attr, result[:attributes][attr] ]) }
+
         matches   = response.next_int
         is_64_bit = response.next_int
-        for i in 0...matches
+        
+        result[:matches] = (0...matches).map do |i|
           doc = is_64_bit > 0 ? response.next_64bit_int : response.next_int
           weight = response.next_int
 
-          result[:matches] << {:doc => doc, :weight => weight, :index => i, :attributes => {}}
-          result[:attribute_names].each do |attr|
-            result[:matches].last[:attributes][attr] = attribute_from_type(
-              result[:attributes][attr], response
-            )
+          current_match_attributes = {}
+
+          result_attribute_names_and_types.each do |attr, type|
+            current_match_attributes[attr] = attribute_from_type(type, response)
           end
+          
+          {:doc => doc, :weight => weight, :index => i, :attributes => current_match_attributes}
         end
 
         result[:total] = response.next_int.to_i || 0
@@ -390,6 +400,8 @@ module Riddle
       options[:load_files]       ||= false
       options[:html_strip_mode]  ||= 'index'
       options[:allow_empty]      ||= false
+      options[:passage_boundary] ||= 'none'
+      options[:emit_zones]       ||= false
       
       response = Response.new request(:excerpt, excerpts_message(options))
       
@@ -514,8 +526,9 @@ module Riddle
       true
     end
     
-    # Connects to the Sphinx daemon, and yields a socket to use. The socket is
-    # closed at the end of the block.
+    # If there's an active connection to the Sphinx daemon, this will yield the
+    # socket. If there's no active connection, then it will connect, yield the
+    # new socket, then close it.
     def connect(&block)
       if @socket.nil? || @socket.closed?
         @socket = nil
@@ -567,6 +580,34 @@ module Riddle
       socket
     end
     
+    def request_header(command, length = 0)
+      length += key_message.length if key
+      core_header = case command
+      when :search
+        # Message length is +4/+8 to account for the following count value for
+        # the number of messages.
+        if Versions[command] >= 0x118
+          [Commands[command], Versions[command], 8 + length].pack("nnN")
+        else
+          [Commands[command], Versions[command], 4 + length].pack("nnN")
+        end
+      when :status
+        [Commands[command], Versions[command], 4, 1].pack("nnNN")
+      else
+        [Commands[command], Versions[command], length].pack("nnN")
+      end
+      
+      key ? core_header + key_message : core_header
+    end
+    
+    def key_message
+      @key_message ||= begin
+        message = Message.new
+        message.append_string key
+        message.to_s
+      end
+    end
+    
     # Send a collection of messages, for a command type (eg, search, excerpts,
     # update), to the Sphinx daemon.
     def request(command, messages)
@@ -575,6 +616,7 @@ module Riddle
       version  = 0
       length   = 0
       message  = Array(messages).join("")
+      
       if message.respond_to?(:force_encoding)
         message = message.force_encoding('ASCII-8BIT')
       end
@@ -582,20 +624,17 @@ module Riddle
       connect do |socket|
         case command
         when :search
-          # Message length is +4 to account for the following count value for
-          # the number of messages (well, that's what I'm assuming).
-          socket.send [
-            Commands[command], Versions[command],
-            4+message.length,  messages.length
-          ].pack("nnNN") + message, 0
+          if Versions[command] >= 0x118
+            socket.send request_header(command, message.length) + 
+              [0, messages.length].pack('NN') + message, 0
+          else
+            socket.send request_header(command, message.length) +
+              [messages.length].pack('N') + message, 0
+          end
         when :status
-          socket.send [
-            Commands[command], Versions[command], 4, 1
-          ].pack("nnNN"), 0
+          socket.send request_header(command, message.length), 0
         else
-          socket.send [
-            Commands[command], Versions[command], message.length
-          ].pack("nnN") + message, 0
+          socket.send request_header(command, message.length) + message, 0
         end
         
         header = socket.recv(8)
@@ -769,20 +808,28 @@ module Riddle
       
       message.to_s
     end
+
+    AttributeHandlers = {
+      AttributeTypes[:integer] =>           :next_int,
+      AttributeTypes[:timestamp] =>         :next_int,
+      AttributeTypes[:ordinal] =>           :next_int,
+      AttributeTypes[:bool] =>              :next_int,
+      AttributeTypes[:float] =>             :next_float,
+      AttributeTypes[:bigint] =>            :next_64bit_int,
+      AttributeTypes[:string] =>            :next,
+
+      AttributeTypes[:multi] + AttributeTypes[:integer]   => :next_int_array,
+      AttributeTypes[:multi] + AttributeTypes[:timestamp] => :next_int_array,
+      AttributeTypes[:multi] + AttributeTypes[:ordinal]   => :next_int_array,
+      AttributeTypes[:multi] + AttributeTypes[:bool]      => :next_int_array,
+      AttributeTypes[:multi] + AttributeTypes[:float]     => :next_float_array,
+      AttributeTypes[:multi] + AttributeTypes[:bigint]    => :next_64bit_int_array,
+      AttributeTypes[:multi] + AttributeTypes[:string]    => :next_array
+    }
     
     def attribute_from_type(type, response)
-      type -= AttributeTypes[:multi] if is_multi = type > AttributeTypes[:multi]
-      
-      case type
-      when AttributeTypes[:float]
-        is_multi ? response.next_float_array    : response.next_float
-      when AttributeTypes[:bigint]
-        is_multi ? response.next_64bit_int_arry : response.next_64bit_int
-      when AttributeTypes[:string]
-        is_multi ? response.next_array          : response.next
-      else
-        is_multi ? response.next_int_array      : response.next_int
-      end
+      handler = AttributeHandlers[type]
+      response.send handler
     end
     
     def excerpt_flags(options)
@@ -795,6 +842,7 @@ module Riddle
       flags |= 64  if options[:force_all_words]
       flags |= 128 if options[:load_files]
       flags |= 256 if options[:allow_empty]
+      flags |= 512 if options[:emit_zones]
       flags
     end
   end

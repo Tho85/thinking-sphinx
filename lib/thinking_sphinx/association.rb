@@ -46,9 +46,7 @@ module ThinkingSphinx
       # association is polymorphic - create associations for each
       # non-polymorphic reflection.
       polymorphic_classes(ref).collect { |poly_class|
-        reflection = depolymorphic_reflection(ref, poly_class)
-        klass.reflections[reflection.name] = reflection
-        Association.new parent, reflection
+        Association.new parent, depolymorphic_reflection(ref, klass, poly_class)
       }
     end
     
@@ -58,16 +56,14 @@ module ThinkingSphinx
     def join_to(base_join)
       parent.join_to(base_join) if parent && parent.join.nil?
       
-      @join ||= ::ActiveRecord::Associations::ClassMethods::JoinDependency::JoinAssociation.new(
-        @reflection, base_join, parent ? parent.join : base_join.joins.first
+      @join ||= join_association_class.new(
+        @reflection, base_join, parent ? parent.join : join_parent(base_join)
       )
     end
     
     def arel_join
       @join.join_type = Arel::OuterJoin
-      @join.options[:conditions].gsub!(/::ts_join_alias::/,
-        "#{@reflection.klass.connection.quote_table_name(@join.parent.aliased_table_name)}"
-      ) if @join.options[:conditions].is_a?(String)
+      rewrite_conditions
       
       @join
     end
@@ -97,8 +93,12 @@ module ThinkingSphinx
     
     def primary_key_from_reflection
       if @reflection.options[:through]
-        @reflection.source_reflection.options[:foreign_key] ||
-        @reflection.source_reflection.primary_key_name
+        if ThinkingSphinx.rails_3_1?
+          @reflection.source_reflection.foreign_key
+        else
+          @reflection.source_reflection.options[:foreign_key] ||
+          @reflection.source_reflection.primary_key_name
+        end
       elsif @reflection.macro == :has_and_belongs_to_many
         @reflection.association_foreign_key
       else
@@ -109,7 +109,11 @@ module ThinkingSphinx
     def table
       if @reflection.options[:through] ||
         @reflection.macro == :has_and_belongs_to_many
-        @join.aliased_join_table_name
+        if ThinkingSphinx.rails_3_1?
+          @join.tables.first.name
+        else
+          @join.aliased_join_table_name
+        end
       else
         @join.aliased_table_name
       end
@@ -117,15 +121,16 @@ module ThinkingSphinx
     
     private
     
-    def self.depolymorphic_reflection(reflection, klass)
-      ::ActiveRecord::Reflection::AssociationReflection.new(
-        reflection.macro,
-        "#{reflection.name}_#{klass.name}".to_sym,
-        casted_options(klass, reflection),
-        reflection.active_record
-      )
+    def self.depolymorphic_reflection(reflection, source_class, poly_class)
+      name = "#{reflection.name}_#{poly_class.name}".to_sym
+      
+      source_class.reflections[name] ||=
+        ::ActiveRecord::Reflection::AssociationReflection.new(
+          reflection.macro, name, casted_options(poly_class, reflection),
+          reflection.active_record
+        )
     end
-    
+        
     # Returns all the objects that could be currently instantiated from a
     # polymorphic association. This is pretty damn fast if there's an index on
     # the foreign type column - but if there isn't, it can take a while if you
@@ -133,11 +138,11 @@ module ThinkingSphinx
     # 
     def self.polymorphic_classes(ref)
       ref.active_record.connection.select_all(
-        "SELECT DISTINCT #{ref.options[:foreign_type]} " +
+        "SELECT DISTINCT #{foreign_type(ref)} " +
         "FROM #{ref.active_record.table_name} " +
-        "WHERE #{ref.options[:foreign_type]} IS NOT NULL"
+        "WHERE #{foreign_type(ref)} IS NOT NULL"
       ).collect { |row|
-        row[ref.options[:foreign_type]].constantize
+        row[foreign_type(ref)].constantize
       }
     end
     
@@ -151,19 +156,75 @@ module ThinkingSphinx
       options[:class_name]    = klass.name
       options[:foreign_key] ||= "#{ref.name}_id"
       
-      quoted_foreign_type = klass.connection.quote_column_name ref.options[:foreign_type]
+      quoted_foreign_type = klass.connection.quote_column_name foreign_type(ref)
       case options[:conditions]
       when nil
         options[:conditions] = "::ts_join_alias::.#{quoted_foreign_type} = '#{klass.name}'"
       when Array
         options[:conditions] << "::ts_join_alias::.#{quoted_foreign_type} = '#{klass.name}'"
       when Hash
-        options[:conditions].merge!(ref.options[:foreign_type] => klass.name)
+        options[:conditions].merge!(foreign_type(ref) => klass.name)
       else
         options[:conditions] << " AND ::ts_join_alias::.#{quoted_foreign_type} = '#{klass.name}'"
       end
       
       options
+    end
+    
+    def join_association_class
+      if ThinkingSphinx.rails_3_1?
+        ::ActiveRecord::Associations::JoinDependency::JoinAssociation
+      else
+        ::ActiveRecord::Associations::ClassMethods::JoinDependency::JoinAssociation
+      end
+    end
+    
+    def join_parent(join)
+      if ThinkingSphinx.rails_3_1?
+        join.join_parts.first
+      else
+        join.joins.first
+      end
+    end
+    
+    def self.foreign_type(ref)
+      if ThinkingSphinx.rails_3_1?
+        ref.foreign_type
+      else
+        ref.options[:foreign_type]
+      end
+    end
+    
+    def rewrite_conditions
+      @join.options[:conditions] = case @join.options[:conditions]
+      when String
+        rewrite_condition @join.options[:conditions]
+      when Array
+        @join.options[:conditions].collect { |condition|
+          rewrite_condition condition
+        }
+      else
+        @join.options[:conditions]
+      end
+    end
+    
+    def rewrite_condition(condition)
+      return condition unless condition.is_a?(String)
+      
+      if defined?(ActsAsTaggableOn) &&
+        @reflection.klass == ActsAsTaggableOn::Tagging &&
+        @reflection.name.to_s[/_taggings$/]
+        condition.gsub! /taggings\.tag_id = tags\.id AND/, "" if ThinkingSphinx.rails_3_1?
+        condition = condition.gsub /taggings\./, "#{quoted_alias @join}."
+      end
+      
+      condition.gsub /::ts_join_alias::/, quoted_alias(@join.parent)
+    end
+    
+    def quoted_alias(join)
+      @reflection.klass.connection.quote_table_name(
+        join.aliased_table_name
+      )
     end
   end
 end

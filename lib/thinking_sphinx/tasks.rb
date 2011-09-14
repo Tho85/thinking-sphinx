@@ -6,40 +6,51 @@ namespace :thinking_sphinx do
     if defined?(Rails)
       Rails.application.require_environment!
       Rails.configuration.cache_classes = false
+    elsif defined?(Merb)
+      Rake::Task[:merb_env].invoke
+    elsif defined?(Sinatra)
+      Sinatra::Application.environment = ENV['RACK_ENV']
     end
-    
-    Rake::Task[:merb_env].invoke    if defined?(Merb)
   end
-  
+
   desc "Output the current Thinking Sphinx version"
   task :version => :app_env do
-    puts "Thinking Sphinx v" + ThinkingSphinx.version
+    puts "Thinking Sphinx v" + ThinkingSphinx::Version
   end
-  
+
   desc "Stop if running, then start a Sphinx searchd daemon using Thinking Sphinx's settings"
   task :running_start => :app_env do
     Rake::Task["thinking_sphinx:stop"].invoke if sphinx_running?
     Rake::Task["thinking_sphinx:start"].invoke
   end
-  
+
   desc "Start a Sphinx searchd daemon using Thinking Sphinx's settings"
   task :start => :app_env do
     config = ThinkingSphinx::Configuration.instance
-    
+
     FileUtils.mkdir_p config.searchd_file_path
     raise RuntimeError, "searchd is already running." if sphinx_running?
-    
+
     Dir["#{config.searchd_file_path}/*.spl"].each { |file| File.delete(file) }
-    
-    config.controller.start
-    
-    if sphinx_running?
-      puts "Started successfully (pid #{sphinx_pid})."
+
+    if ENV["NODETACH"] == "true"
+      unless pid = fork
+        config.controller.start(:nodetach => true)
+      end
+      Signal.trap('TERM') { Process.kill(:QUIT, pid) }
+      Signal.trap('INT')  { Process.kill(:QUIT, pid) }
+      Process.wait(pid)
     else
-      puts "Failed to start searchd daemon. Check #{config.searchd_log_file}"
+      config.controller.start
+
+      if sphinx_running?
+        puts "Started successfully (pid #{sphinx_pid})."
+      else
+        puts "Failed to start searchd daemon. Check #{config.searchd_log_file}"
+      end
     end
   end
-  
+
   desc "Stop Sphinx using Thinking Sphinx's settings"
   task :stop => :app_env do
     unless sphinx_running?
@@ -48,26 +59,26 @@ namespace :thinking_sphinx do
       config = ThinkingSphinx::Configuration.instance
       pid    = sphinx_pid
       config.controller.stop
-      
+
       # Ensure searchd is stopped, but don't try too hard
-      Timeout.timeout(5) do
+      Timeout.timeout(config.stop_timeout) do
         sleep(1) until config.controller.stop
       end
-      
+
       puts "Stopped search daemon (pid #{pid})."
     end
   end
-  
+
   desc "Restart Sphinx"
   task :restart => [:app_env, :stop, :start]
-  
+
   desc "Generate the Sphinx configuration file using Thinking Sphinx's settings"
   task :configure => :app_env do
     config = ThinkingSphinx::Configuration.instance
     puts "Generating Configuration to #{config.config_file}"
     config.build
   end
-  
+
   desc "Index data for Sphinx using Thinking Sphinx's settings"
   task :index => :app_env do
     config = ThinkingSphinx::Configuration.instance
@@ -75,18 +86,20 @@ namespace :thinking_sphinx do
       puts "Generating Configuration to #{config.config_file}"
       config.build
     end
-    
+
     FileUtils.mkdir_p config.searchd_file_path
     config.controller.index :verbose => true
   end
-  
+
   desc "Reindex Sphinx without regenerating the configuration file"
   task :reindex => :app_env do
     config = ThinkingSphinx::Configuration.instance
     FileUtils.mkdir_p config.searchd_file_path
-    puts config.controller.index
+    output = config.controller.index
+    puts output
+    config.touch_reindex_file(output)
   end
-  
+
   desc "Stop Sphinx (if it's running), rebuild the indexes, and start Sphinx"
   task :rebuild => :app_env do
     Rake::Task["thinking_sphinx:stop"].invoke if sphinx_running?

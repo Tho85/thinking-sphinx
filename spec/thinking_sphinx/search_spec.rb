@@ -646,6 +646,13 @@ describe ThinkingSphinx::Search do
         filter.attribute.should == 'sphinx_internal_id'
         filter.exclude?.should be_true
       end
+
+      it "should not filter out any ids if :without_ids is an empty array" do
+        ThinkingSphinx::Search.new(:without_ids => []).first
+
+        filter = @client.filters.last
+        filter.attribute.should_not == 'sphinx_internal_id'
+      end
     end
     
     describe 'sort mode' do
@@ -924,7 +931,8 @@ describe ThinkingSphinx::Search do
         it "should not add excerpts method if objects already have one" do
           @search.last.excerpts.should_not be_a(ThinkingSphinx::Excerpter)
         end
-      
+        
+        # Fails in Ruby 1.9 (or maybe it's an RSpec update). Not sure why.
         it "should set up the excerpter with the instances and search" do
           [@alpha_a, @beta_b, @alpha_b, @beta_a].each do |object|
             ThinkingSphinx::Excerpter.should_receive(:new).with(@search, object)
@@ -1144,10 +1152,11 @@ describe ThinkingSphinx::Search do
       @client.stub! :query => {
         :matches => [{
           :attributes => {
-            'sphinx_internal_id' => @alpha.id,
-            'class_crc'          => Alpha.to_crc32,
-            '@groupby'           => 101,
-            '@count'             => 5
+            'sphinx_internal_id'    => @alpha.id,
+            'sphinx_internal_class' => 'Alpha',
+            'class_crc'             => Alpha.to_crc32,
+            '@groupby'              => 101,
+            '@count'                => 5
           }
         }]
       }
@@ -1181,8 +1190,9 @@ describe ThinkingSphinx::Search do
       @client.stub! :query => {
         :matches => [{
           :attributes => {
-            'sphinx_internal_id' => @alpha.id,
-            'class_crc'          => Alpha.to_crc32
+            'sphinx_internal_id'    => @alpha.id,
+            'sphinx_internal_class' => 'Alpha',
+            'class_crc'             => Alpha.to_crc32
           }, :weight => 12
         }]
       }
@@ -1206,11 +1216,12 @@ describe ThinkingSphinx::Search do
       @client.stub! :query => {
         :matches => [{
           :attributes => {
-            'sphinx_internal_id' => @alpha.id,
-            'class_crc'          => Alpha.to_crc32,
-            '@geodist'           => 101,
-            '@groupby'           => 102,
-            '@count'             => 103
+            'sphinx_internal_id'    => @alpha.id,
+            'sphinx_internal_class' => 'Alpha',
+            'class_crc'             => Alpha.to_crc32,
+            '@geodist'              => 101,
+            '@groupby'              => 102,
+            '@count'                => 103
           }, :weight => 12
         }]
       }
