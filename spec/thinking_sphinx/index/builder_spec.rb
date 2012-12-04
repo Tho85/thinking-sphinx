@@ -342,16 +342,6 @@ describe ThinkingSphinx::Index::Builder do
     end
   end
 
-  describe "no fields" do
-    it "should raise an exception" do
-      lambda {
-        ThinkingSphinx::Index::Builder.generate(Person) do
-          #
-        end
-      }.should raise_error
-    end
-  end
-
   describe "explicit source" do
     before :each do
       @index = ThinkingSphinx::Index::Builder.generate(Person) do
